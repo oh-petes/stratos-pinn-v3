@@ -78,7 +78,7 @@ from physicsnemo.sym.hydra.scheduler import ExponentialLRConf
 
 SimConfig = PhysicsNeMoConfig
 
-from sympy import Symbol, Function, Eq, diff
+from sympy import Symbol, Function, diff
 
 
 # =============================================================================
@@ -214,22 +214,17 @@ def run(cfg: SimConfig) -> None:
     # -------------------------------------------------------------------------
 
     # Coordinate normalization: physical (x,y,z,t) → normalized (x_hat,…,t_hat)
-    # PhysicsNeMo samples points in physical space; this node maps them into
+    # Node.from_sympy(expr, out_name) — one equation per node in physicsnemo.
+    # PhysicsNeMo samples points in physical space; these nodes map them into
     # the [0,1] space that the network operates in.
-    coord_norm_node = Node.from_sympy(
-        [
-            Eq(Symbol("x_hat"), (Symbol("x") - X_MIN)   / X_SCALE),
-            Eq(Symbol("y_hat"), (Symbol("y") - Y_MIN)   / Y_SCALE),
-            Eq(Symbol("z_hat"), (Symbol("z") - Z_MIN)   / Z_SCALE),
-            Eq(Symbol("t_hat"), (Symbol("t") - T_MIN_T) / T_SCALE),
-        ],
-        name="coord_normalization",
-    )
+    x_hat_node = Node.from_sympy((Symbol("x") - X_MIN)   / X_SCALE, "x_hat")
+    y_hat_node = Node.from_sympy((Symbol("y") - Y_MIN)   / Y_SCALE, "y_hat")
+    z_hat_node = Node.from_sympy((Symbol("z") - Z_MIN)   / Z_SCALE, "z_hat")
+    t_hat_node = Node.from_sympy((Symbol("t") - T_MIN_T) / T_SCALE, "t_hat")
 
     # Temperature denormalization: T_hat ∈ [0,1] → T in Kelvin
     T_denorm_node = Node.from_sympy(
-        [Eq(Symbol("T"), Symbol("T_hat") * T_RANGE + T_INITIAL)],
-        name="T_denormalization",
+        Symbol("T_hat") * T_RANGE + T_INITIAL, "T"
     )
 
     # Neumann wall expression: radial heat flux on the lateral surface.
@@ -239,12 +234,9 @@ def run(cfg: SimConfig) -> None:
     #   neumann_wall = normal_x*(dT_hat/dx_hat) + normal_y*(dT_hat/dy_hat) = 0
     # Double-underscore notation: "T_hat__x_hat" = dT_hat/dx_hat (autodiff).
     neumann_wall_node = Node.from_sympy(
-        [Eq(
-            Symbol("neumann_wall"),
-            Symbol("normal_x") * Symbol("T_hat__x_hat")
-            + Symbol("normal_y") * Symbol("T_hat__y_hat"),
-        )],
-        name="neumann_wall_expr",
+        Symbol("normal_x") * Symbol("T_hat__x_hat")
+        + Symbol("normal_y") * Symbol("T_hat__y_hat"),
+        "neumann_wall",
     )
 
     # -------------------------------------------------------------------------
@@ -295,7 +287,7 @@ def run(cfg: SimConfig) -> None:
     # -------------------------------------------------------------------------
     # Order matters: normalization → network → residuals / neumann.
     all_nodes = (
-        [coord_norm_node]     # (x,y,z,t) → (x_hat, y_hat, z_hat, t_hat)
+        [x_hat_node, y_hat_node, z_hat_node, t_hat_node]  # (x,y,z,t) → normalized
         + [network_node]      # (x_hat,…,t_hat) → T_hat
         + pde_nodes           # T_hat → heat_equation residual
         + [T_denorm_node]     # T_hat → T  [Kelvin, for diagnostics]
