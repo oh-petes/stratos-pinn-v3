@@ -53,6 +53,16 @@ import sys
 import numpy as np
 import torch
 
+# ---------------------------------------------------------------------------
+# numpy compatibility shim
+# ---------------------------------------------------------------------------
+# numpoly (a chaospy dependency used by physicsnemo.sym geometry sampling)
+# calls numpy.core.multiarray.set_legacy_print_mode, which was removed in
+# numpy 1.25.  numpy < 1.25 has no Python 3.12 wheels, so we are forced to
+# run 1.26+ and patch the missing symbol back in before any physicsnemo import.
+if not hasattr(np.core.multiarray, "set_legacy_print_mode"):
+    np.core.multiarray.set_legacy_print_mode = lambda *args, **kwargs: None
+
 import hydra
 from hydra.core.config_store import ConfigStore
 from omegaconf import OmegaConf, open_dict
