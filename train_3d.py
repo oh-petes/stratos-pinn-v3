@@ -53,20 +53,6 @@ import sys
 import numpy as np
 import torch
 
-# ── Namespace bootstrap ───────────────────────────────────────────────────────
-# nvidia-modulus provides physicsnemo.nn / physicsnemo.models etc.
-# modulus-sym (cloned to /content/modulus-sym) provides physicsnemo.sym.
-# Both live under the same top-level "physicsnemo" namespace, but Python only
-# knows about the nvidia-modulus half until we extend __path__.
-# This MUST happen before any "from physicsnemo.sym import ..." line because
-# physicsnemo.nn itself imports physicsnemo.sym internally at load time.
-import physicsnemo as _pnemo
-_repo_phys = "/content/modulus-sym/physicsnemo"
-if _repo_phys not in list(_pnemo.__path__):
-    _pnemo.__path__ = list(_pnemo.__path__) + [_repo_phys]
-del _pnemo, _repo_phys
-# ─────────────────────────────────────────────────────────────────────────────
-
 import hydra
 from hydra.core.config_store import ConfigStore
 from omegaconf import OmegaConf, open_dict
