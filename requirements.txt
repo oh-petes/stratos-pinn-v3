@@ -1,0 +1,35 @@
+--extra-index-url https://pypi.nvidia.com
+
+# NVIDIA Modulus symbolic (PINN) branch
+# This is the only package that MUST come from the NVIDIA index above.
+# If this version is unavailable, omit the pin: nvidia-modulus[sym]
+nvidia-modulus[sym]==0.6.0
+
+# Scientific stack
+numpy==1.26.4
+scipy==1.12.0
+sympy==1.12
+matplotlib==3.8.3
+
+# Hydra / OmegaConf — Modulus uses these for config management
+hydra-core==1.3.2
+omegaconf==2.3.0
+
+# Utilities
+einops==0.7.0
+tqdm==4.66.2
+
+# ----------------------------------------------------------------------------
+# NOTE FOR GOOGLE COLAB
+# ----------------------------------------------------------------------------
+# Colab ships with torch pre-installed (CUDA 12.x build). Do NOT re-install
+# torch from this file — let Modulus resolve the torch dependency automatically.
+#
+# Recommended Colab install cell (run before importing this project):
+#
+#   !pip install --extra-index-url https://pypi.nvidia.com \
+#       "nvidia-modulus[sym]==0.6.0" sympy==1.12 einops==0.7.0
+#
+# Verify the installed version with:
+#   import modulus; print(modulus.__version__)
+# ----------------------------------------------------------------------------
