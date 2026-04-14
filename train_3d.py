@@ -79,6 +79,7 @@ from physicsnemo.sym.domain.constraint import (
 from physicsnemo.sym.node import Node
 from physicsnemo.sym.key import Key
 from physicsnemo.sym.eq.pde import PDE
+from physicsnemo.sym.models.arch import Arch   # base class for all PhysicsNeMo models
 
 # Config classes — pulled directly from the physicsnemo structured-config hierarchy
 from physicsnemo.sym.hydra.config import PhysicsNeMoConfig
@@ -100,9 +101,14 @@ from sympy import Symbol, Function, diff
 # Fourier-feature network directly in PyTorch so the rest of the PINN
 # infrastructure (Node, Solver, Domain, constraints) is unaffected.
 
-class FourierFeatureNet(torch.nn.Module):
+class FourierFeatureNet(Arch):
     """
     Fourier-feature encoding + SiLU fully-connected backbone.
+
+    Inherits from Arch (physicsnemo.sym.models.arch.Arch) so that the
+    PhysicsNeMo Solver recognises this module as a trainable network and
+    correctly registers its parameters with the Adam optimizer.  A plain
+    torch.nn.Module is silently excluded from the parameter search.
 
     Architecture
     ____________
@@ -124,7 +130,9 @@ class FourierFeatureNet(torch.nn.Module):
         n_frequencies: int = 8,      # number of Fourier frequencies
         freq_scale:  float = 1.0,
     ):
-        super().__init__()
+        # Arch.__init__ stores input_keys / output_keys and calls
+        # torch.nn.Module.__init__ — must come before any nn.Module ops.
+        super().__init__(input_keys=input_keys, output_keys=output_keys)
         self._in_keys  = [k.name for k in input_keys]
         self._out_keys = [k.name for k in output_keys]
         n_in  = len(input_keys)
@@ -158,15 +166,10 @@ class FourierFeatureNet(torch.nn.Module):
         return {k: out[:, i : i + 1]
                 for i, k in enumerate(self._out_keys)}
 
-    # ------------------------------------------------------------------
-    def make_node(self, name: str = "heat_network", jit: bool = False):
-        """Wrap this module as a PhysicsNeMo Node."""
-        return Node(
-            inputs=[Key(k) for k in self._in_keys],
-            outputs=[Key(k) for k in self._out_keys],
-            evaluate=self,
-            name=name,
-        )
+    # make_node() is inherited from Arch.  Arch.make_node(name, jit, optimize)
+    # creates Node(self.input_keys, self.output_keys, self, name=name,
+    # optimize=optimize) with optimize=True by default — exactly what the
+    # Solver needs to register this network's parameters with the optimizer.
 
 
 # =============================================================================
