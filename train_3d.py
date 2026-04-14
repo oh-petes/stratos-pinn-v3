@@ -479,11 +479,12 @@ def run(cfg: SimConfig) -> None:
     #   - Neumann BC losses   → small throughout (soft constraints)
     # Inject loss aggregator config — required when running without a
     # conf/config.yaml file.  PhysicsNeMoConfig declares `loss` as a
-    # MISSING sentinel typed as LossConf; a raw dict fails validation.
-    # Must use the official SumConf dataclass so the type check passes.
-    from physicsnemo.sym.hydra.loss import SumConf
+    # MISSING sentinel typed as LossConf.  SumConf no longer exists in
+    # the updated API; the base LossConf dataclass from hydra.config is
+    # the correct type to satisfy the schema validation.
+    from physicsnemo.sym.hydra.config import LossConf
     OmegaConf.set_struct(cfg, False)
-    cfg.loss = OmegaConf.structured(SumConf())
+    cfg.loss = OmegaConf.structured(LossConf())
 
     slv = Solver(cfg=cfg, domain=domain)
     slv.solve()
