@@ -70,11 +70,13 @@ from physicsnemo.sym.node import Node
 from physicsnemo.sym.key import Key
 from physicsnemo.sym.eq.pde import PDE
 
-# Config class — PhysicsNeMo renamed ModulusConfig; try both for compatibility
-try:
-    from physicsnemo.sym.hydra import PhysicsNeMoConfig as SimConfig
-except ImportError:
-    from physicsnemo.sym.hydra import ModulusConfig as SimConfig
+# Config classes — pulled directly from the physicsnemo structured-config hierarchy
+from physicsnemo.sym.hydra.config import PhysicsNeMoConfig
+from physicsnemo.sym.hydra.training import DefaultTraining, DefaultStopCriterion
+from physicsnemo.sym.hydra.optimizer import AdamConf
+from physicsnemo.sym.hydra.scheduler import ExponentialLRConf
+
+SimConfig = PhysicsNeMoConfig
 
 from sympy import Symbol, Function, Eq, diff
 
@@ -164,12 +166,12 @@ class NormalizedHeatEquation3D(PDE):
 
 # =============================================================================
 # 3.  HYDRA CONFIG STORE
-#     Registers the config dataclass so @hydra.main works without a conf/
+#     Registers PhysicsNeMoConfig so @hydra.main works without a conf/
 #     directory on disk — required for single-file Colab usage.
 # =============================================================================
 
 cs = ConfigStore.instance()
-cs.store(name="config", node=SimConfig)
+cs.store(name="config", node=PhysicsNeMoConfig)
 
 
 # =============================================================================
@@ -180,19 +182,20 @@ cs.store(name="config", node=SimConfig)
 def run(cfg: SimConfig) -> None:
 
     # --- Training hyperparameters --------------------------------------------
-    # PhysicsNeMoConfig stores training/optimizer as MISSING sentinels when
-    # no conf/ directory is present.  open_dict temporarily lifts struct
-    # validation so we can populate them directly.
+    # PhysicsNeMoConfig declares training/optimizer/scheduler/stop_criterion
+    # as MISSING sentinels — they must be populated before Solver reads them.
+    # open_dict lifts struct validation; OmegaConf.structured() ensures the
+    # assigned value is the exact subclass the typed field expects.
     with open_dict(cfg):
-        cfg.training = OmegaConf.create({
-            "max_steps":         50_000,
-            "grad_agg_freq":     1,
-            "rec_results_cpu":   False,
-            "save_network_freq": 5_000,
-            "print_stats_freq":  100,
-            "summary_freq":      1_000,
-            "save_filetypes":    "npz",
-        })
+        cfg.training = OmegaConf.structured(DefaultTraining(
+            max_steps=50_000,
+            save_network_freq=5_000,
+            print_stats_freq=100,
+            summary_freq=1_000,
+        ))
+        cfg.stop_criterion = OmegaConf.structured(DefaultStopCriterion())
+        cfg.optimizer      = OmegaConf.structured(AdamConf())
+        cfg.scheduler      = OmegaConf.structured(ExponentialLRConf(gamma=0.9999))
 
     # -------------------------------------------------------------------------
     # 4.1  Geometry
