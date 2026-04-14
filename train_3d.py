@@ -484,7 +484,9 @@ def run(cfg: SimConfig) -> None:
     # the correct type to satisfy the schema validation.
     from physicsnemo.sym.hydra.config import LossConf
     OmegaConf.set_struct(cfg, False)
-    cfg.loss = OmegaConf.structured(LossConf())
+    loss_cfg = LossConf()
+    loss_cfg._target_ = "physicsnemo.sym.loss.aggregator.Sum"
+    cfg.loss = loss_cfg
 
     slv = Solver(cfg=cfg, domain=domain)
     slv.solve()
