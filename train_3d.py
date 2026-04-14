@@ -291,8 +291,11 @@ def run(cfg: SimConfig) -> None:
     # Cylinder axis along z:
     #   z=0      — plasma-facing hot side   (Dirichlet BC)
     #   z=HEIGHT — insulated cabin side     (Neumann BC)
+    # center=(0, 0, HEIGHT/2) places faces exactly at z=0 (hot side)
+    # and z=HEIGHT (insulated side).  center=(0,0,0) would span z=−0.05…+0.05
+    # and leave the z=0.1 back-face BC hunting empty space → AssertionError.
     cylinder = Cylinder(
-        center=(0, 0, 0),
+        center=(0, 0, HEIGHT / 2),
         radius=RADIUS,
         height=HEIGHT,
     )
