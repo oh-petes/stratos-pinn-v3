@@ -401,7 +401,7 @@ def run(cfg: SimConfig) -> None:
         geometry=cylinder,
         outvar={"T_hat": 1.0},
         batch_size=1000,
-        criteria=lambda x, y, z: np.isclose(z, 0.0, atol=1e-4),
+        criteria=lambda invar, params: np.isclose(invar["z"], 0.0, atol=1e-4),
         parameterization={Symbol("t"): (0.1, T_END)},
         lambda_weighting={"T_hat": 10.0},
     )
@@ -415,7 +415,7 @@ def run(cfg: SimConfig) -> None:
         geometry=cylinder,
         outvar={"T_hat__z_hat": 0},
         batch_size=1000,
-        criteria=lambda x, y, z: np.isclose(z, HEIGHT, atol=1e-4),
+        criteria=lambda invar, params: np.isclose(invar["z"], HEIGHT, atol=1e-4),
         parameterization={Symbol("t"): (0, T_END)},
         lambda_weighting={"T_hat__z_hat": 1.0},
     )
@@ -429,10 +429,10 @@ def run(cfg: SimConfig) -> None:
         geometry=cylinder,
         outvar={"neumann_wall": 0},
         batch_size=1000,
-        criteria=lambda x, y, z: (
-            (np.sqrt(x ** 2 + y ** 2) >= RADIUS - 1e-4)
-            & ~np.isclose(z, 0.0,    atol=1e-4)
-            & ~np.isclose(z, HEIGHT, atol=1e-4)
+        criteria=lambda invar, params: (
+            (np.sqrt(invar["x"] ** 2 + invar["y"] ** 2) >= RADIUS - 1e-4)
+            & ~np.isclose(invar["z"], 0.0,    atol=1e-4)
+            & ~np.isclose(invar["z"], HEIGHT, atol=1e-4)
         ),
         parameterization={Symbol("t"): (0, T_END)},
         lambda_weighting={"neumann_wall": 1.0},
