@@ -55,7 +55,7 @@ import torch
 
 import hydra
 from hydra.core.config_store import ConfigStore
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 
 # PhysicsNeMo is the renamed successor to NVIDIA modulus-sym.
 # All modulus.sym.* imports become physicsnemo.sym.*
@@ -180,10 +180,19 @@ cs.store(name="config", node=SimConfig)
 def run(cfg: SimConfig) -> None:
 
     # --- Training hyperparameters --------------------------------------------
-    OmegaConf.update(cfg, "training.max_steps",         50_000, merge=True)
-    OmegaConf.update(cfg, "training.save_network_freq",  5_000, merge=True)
-    OmegaConf.update(cfg, "training.print_stats_freq",     100, merge=True)
-    OmegaConf.update(cfg, "training.summary_freq",        1_000, merge=True)
+    # PhysicsNeMoConfig stores training/optimizer as MISSING sentinels when
+    # no conf/ directory is present.  open_dict temporarily lifts struct
+    # validation so we can populate them directly.
+    with open_dict(cfg):
+        cfg.training = OmegaConf.create({
+            "max_steps":         50_000,
+            "grad_agg_freq":     1,
+            "rec_results_cpu":   False,
+            "save_network_freq": 5_000,
+            "print_stats_freq":  100,
+            "summary_freq":      1_000,
+            "save_filetypes":    "npz",
+        })
 
     # -------------------------------------------------------------------------
     # 4.1  Geometry
