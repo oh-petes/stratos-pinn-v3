@@ -50,6 +50,7 @@ Environment
 
 import os
 import sys
+import glob
 import numpy as np
 import torch
 
@@ -173,6 +174,117 @@ class FourierFeatureNet(Arch):
 
 
 # =============================================================================
+# BEST-WEIGHT SOLVER  (save-best checkpointing + auto-resume)
+# =============================================================================
+
+class BestWeightSolver(Solver):
+    """
+    Thin Solver subclass that adds three features on top of the standard
+    PhysicsNeMo Solver:
+
+    1. Save-best checkpointing
+       Every save_network_freq steps PhysicsNeMo calls save_checkpoint().
+       We intercept it: if the tracked total loss is a new minimum we save
+       all trainable node state_dicts to outputs/models/ with a descriptive
+       filename (best_weights_step_NNNNNN_loss_X.XXe±XX.pth) and delete the
+       previous best file to prevent disk bloat.
+
+    2. Auto-resume from best weights
+       At construction time, if any best_weights_*.pth exists in
+       outputs/models/, load the network weights from the latest file.
+       PhysicsNeMo's NATIVE checkpoint (outputs/networks/) still governs
+       the optimizer + scheduler state, so the LR is always correct when a
+       native checkpoint is present.  If only our file exists (first resume
+       after a crash), the network warm-starts from the best-known weights
+       and the LR restarts from 1e-3 — acceptable because warm weights
+       converge fast regardless.
+
+    3. Loss capture
+       compute_gradients is set as a plain function reference by
+       Trainer.__init__, not as a bound method, so wrapping it in our
+       __init__ (after super().__init__) is safe and requires no changes to
+       the training loop or _train_loop() override.
+
+    NOTE on Dynamic Loss Balancing (Feature 5 from directive):
+       PhysicsNeMo exposes GradNorm / ReLoBRaLo aggregators via the
+       loss._target_ config field.  However, these aggregators require
+       per-constraint gradient norms computed inside the Trainer's
+       CUDA-graph path, and their API changed incompatibly between 0.6 and
+       the current HEAD.  Enabling them with the cloned HEAD on Python 3.12
+       is too brittle without a working test environment.  Skipped per
+       directive: "If native support is too brittle, skip this step."
+       The manual lambda_weighting values in each constraint (10× Dirichlet,
+       5× IC) already provide coarse loss balancing.
+    """
+
+    _BEST_DIR: str = os.path.join("outputs", "models")
+
+    def __init__(self, cfg: "SimConfig", domain: Domain) -> None:
+        self._loss_tracker: dict = {"last": float("inf")}
+        self._best_loss: float = float("inf")
+        self._best_ckpt: "str | None" = None
+        os.makedirs(self._BEST_DIR, exist_ok=True)
+
+        super().__init__(cfg, domain)
+
+        # Wrap compute_gradients (a plain callable set by Trainer.__init__)
+        # to record the total-loss scalar after every backward pass.
+        # Must wrap AFTER super().__init__ so the original reference exists.
+        _orig    = self.compute_gradients
+        _tracker = self._loss_tracker
+
+        def _tracked(aggregator, model, step):
+            loss, losses = _orig(aggregator, model, step)
+            _tracker["last"] = float(loss.detach())
+            return loss, losses
+
+        self.compute_gradients = _tracked
+
+    def save_checkpoint(self, step: int) -> None:
+        # Always run the native Modulus checkpoint first.
+        # This preserves optimizer + scheduler state for full training-state
+        # resume and writes to outputs/networks/ as usual.
+        super().save_checkpoint(step)
+
+        loss_val = self._loss_tracker["last"]
+        if loss_val >= self._best_loss:
+            return  # No improvement — nothing to do.
+
+        # Remove the previous best file (disk hygiene).
+        if self._best_ckpt and os.path.exists(self._best_ckpt):
+            os.remove(self._best_ckpt)
+
+        self._best_loss = loss_val
+        self._best_ckpt = os.path.join(
+            self._BEST_DIR,
+            f"best_weights_step_{step:06d}_loss_{loss_val:.2e}.pth",
+        )
+
+        # Collect every unique trainable node's state_dict.
+        seen:   set  = set()
+        states: dict = {}
+        for constr in self.domain.constraints.values():
+            for node in constr.nodes:
+                nid = id(node.evaluate)
+                if (
+                    node.optimize
+                    and nid not in seen
+                    and hasattr(node.evaluate, "state_dict")
+                ):
+                    seen.add(nid)
+                    states[node.name] = node.evaluate.state_dict()
+
+        torch.save(
+            {"states": states, "step": step, "loss": self._best_loss},
+            self._best_ckpt,
+        )
+        print(
+            f"\n  ✓ New best  step={step:6d}  "
+            f"loss={self._best_loss:.4e}  → {os.path.basename(self._best_ckpt)}"
+        )
+
+
+# =============================================================================
 # 1.  PHYSICAL & NORMALIZATION CONSTANTS
 # =============================================================================
 
@@ -280,7 +392,7 @@ def run(cfg: SimConfig) -> None:
     with open_dict(cfg):
         cfg.training = OmegaConf.structured(DefaultTraining(
             max_steps=50_000,
-            save_network_freq=5_000,
+            save_network_freq=500,   # checkpoint every 500 steps for best-weight tracking
             print_stats_freq=100,
             summary_freq=1_000,
         ))
@@ -410,6 +522,7 @@ def run(cfg: SimConfig) -> None:
         criteria=lambda invar, params: np.isclose(invar["z"], 0.0, atol=1e-4),
         parameterization={Symbol("t"): (0.1, T_END)},
         lambda_weighting={"T_hat": 10.0},
+        fixed_dataset=False,   # resample boundary points every step (anti-memorization)
     )
     domain.add_constraint(front_face_bc, name="bc_front_dirichlet")
 
@@ -424,6 +537,7 @@ def run(cfg: SimConfig) -> None:
         criteria=lambda invar, params: np.isclose(invar["z"], HEIGHT, atol=1e-4),
         parameterization={Symbol("t"): (0, T_END)},
         lambda_weighting={"T_hat__z_hat": 1.0},
+        fixed_dataset=False,
     )
     domain.add_constraint(back_face_bc, name="bc_back_neumann")
 
@@ -442,6 +556,7 @@ def run(cfg: SimConfig) -> None:
         ),
         parameterization={Symbol("t"): (0, T_END)},
         lambda_weighting={"neumann_wall": 1.0},
+        fixed_dataset=False,
     )
     domain.add_constraint(lateral_wall_bc, name="bc_wall_neumann")
 
@@ -477,18 +592,56 @@ def run(cfg: SimConfig) -> None:
     #   - IC loss             → converged by 10 000 steps (weight =  5)
     #   - Interior PDE loss   → below 1e-3 by ~30 000 steps
     #   - Neumann BC losses   → small throughout (soft constraints)
-    # Inject loss aggregator config — required when running without a
-    # conf/config.yaml file.  PhysicsNeMoConfig declares `loss` as a
-    # MISSING sentinel typed as LossConf.  SumConf no longer exists in
-    # the updated API; the base LossConf dataclass from hydra.config is
-    # the correct type to satisfy the schema validation.
+    # -------------------------------------------------------------------------
+    # 4.8  Auto-Resume from Best Weights
+    # -------------------------------------------------------------------------
+    # Scan outputs/models/ for a previously saved best_weights_*.pth file.
+    # If found, warm-start the network before the Solver is created so that
+    # PhysicsNeMo's native checkpoint (outputs/networks/) — which governs the
+    # optimizer + scheduler state and therefore the LR — can overwrite the
+    # weights if a more recent native checkpoint also exists.
+    #
+    # Priority:
+    #   native checkpoint exists  → full resume (weights + LR state) ← preferred
+    #   only best_weights exists  → warm-start weights, LR restarts from 1e-3
+    #   neither exists            → fresh training run
+    existing_best = sorted(
+        glob.glob(os.path.join(BestWeightSolver._BEST_DIR, "best_weights_*.pth"))
+    )
+    if existing_best:
+        best_file = existing_best[-1]   # highest step = most recent best
+        ckpt = torch.load(best_file, map_location="cpu")
+        loaded = 0
+        for node in (
+            n
+            for constr in domain.constraints.values()
+            for n in constr.nodes
+        ):
+            if (
+                node.name in ckpt["states"]
+                and hasattr(node.evaluate, "load_state_dict")
+            ):
+                node.evaluate.load_state_dict(ckpt["states"][node.name])
+                loaded += 1
+        print(
+            f"Auto-resumed {loaded} node(s) from {os.path.basename(best_file)}\n"
+            f"  best_loss={ckpt['loss']:.4e}  at step {ckpt['step']}"
+        )
+
+    # -------------------------------------------------------------------------
+    # 4.9  Inject Loss Config & Launch Solver
+    # -------------------------------------------------------------------------
+    # LossConf must be a typed dataclass (not a raw dict) to pass PhysicsNeMo's
+    # schema validation.  _target_ points at the concrete aggregator class.
     from physicsnemo.sym.hydra.config import LossConf
     OmegaConf.set_struct(cfg, False)
     loss_cfg = LossConf()
     loss_cfg._target_ = "physicsnemo.sym.loss.aggregator.Sum"
     cfg.loss = loss_cfg
 
-    slv = Solver(cfg=cfg, domain=domain)
+    # BestWeightSolver wraps compute_gradients to track total loss and
+    # overrides save_checkpoint to persist the best network weights.
+    slv = BestWeightSolver(cfg=cfg, domain=domain)
     slv.solve()
 
 
