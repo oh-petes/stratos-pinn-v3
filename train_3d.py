@@ -74,13 +74,15 @@ except AttributeError:
 if not hasattr(_marray, "set_legacy_print_mode"):
     _marray.set_legacy_print_mode = _noop
 
-# Also patch the legacy np.core path because some numpoly versions reach it
-# directly via the old name even on numpy 2.x.
-try:
-    if not hasattr(np.core.multiarray, "set_legacy_print_mode"):  # noqa: NPY201
-        np.core.multiarray.set_legacy_print_mode = _noop          # noqa: NPY201
-except AttributeError:
-    pass
+# Also patch the legacy np.core path, but ONLY on numpy 1.x.
+# On numpy 2.x, merely accessing np.core.multiarray emits a DeprecationWarning,
+# and numpoly on numpy 2.x will reach np._core.multiarray (already patched above).
+if int(np.__version__.split(".")[0]) < 2:
+    try:
+        if not hasattr(np.core.multiarray, "set_legacy_print_mode"):
+            np.core.multiarray.set_legacy_print_mode = _noop
+    except AttributeError:
+        pass
 
 import hydra
 from hydra.core.config_store import ConfigStore
@@ -540,7 +542,6 @@ def run(cfg: SimConfig) -> None:
         criteria=lambda invar, params: np.isclose(invar["z"], 0.0, atol=1e-4),
         parameterization={Symbol("t"): (0.1, T_END)},
         lambda_weighting={"T_hat": 10.0},
-        fixed_dataset=False,   # resample boundary points every step (anti-memorization)
     )
     domain.add_constraint(front_face_bc, name="bc_front_dirichlet")
 
@@ -555,7 +556,6 @@ def run(cfg: SimConfig) -> None:
         criteria=lambda invar, params: np.isclose(invar["z"], HEIGHT, atol=1e-4),
         parameterization={Symbol("t"): (0, T_END)},
         lambda_weighting={"T_hat__z_hat": 1.0},
-        fixed_dataset=False,
     )
     domain.add_constraint(back_face_bc, name="bc_back_neumann")
 
@@ -574,7 +574,6 @@ def run(cfg: SimConfig) -> None:
         ),
         parameterization={Symbol("t"): (0, T_END)},
         lambda_weighting={"neumann_wall": 1.0},
-        fixed_dataset=False,
     )
     domain.add_constraint(lateral_wall_bc, name="bc_wall_neumann")
 
