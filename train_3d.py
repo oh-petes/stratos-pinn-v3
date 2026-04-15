@@ -57,12 +57,30 @@ import torch
 # ---------------------------------------------------------------------------
 # numpy compatibility shim
 # ---------------------------------------------------------------------------
-# numpoly (a chaospy dependency used by physicsnemo.sym geometry sampling)
-# calls numpy.core.multiarray.set_legacy_print_mode, which was removed in
-# numpy 1.25.  numpy < 1.25 has no Python 3.12 wheels, so we are forced to
-# run 1.26+ and patch the missing symbol back in before any physicsnemo import.
-if not hasattr(np.core.multiarray, "set_legacy_print_mode"):
-    np.core.multiarray.set_legacy_print_mode = lambda *args, **kwargs: None
+# numpoly (pulled in by chaospy, used for geometry point sampling) calls
+# numpy.core.multiarray.set_legacy_print_mode, which was removed in numpy
+# 1.25.  We patch it back as a no-op before any physicsnemo import.
+#
+# numpy 2.x renamed numpy.core → numpy._core (numpy.core still exists but
+# emits DeprecationWarning).  We probe the correct location to avoid noise.
+def _noop(*args, **kwargs):
+    pass
+
+try:
+    _marray = np._core.multiarray          # numpy 2.x path (no deprecation)
+except AttributeError:
+    _marray = np.core.multiarray           # numpy 1.x path
+
+if not hasattr(_marray, "set_legacy_print_mode"):
+    _marray.set_legacy_print_mode = _noop
+
+# Also patch the legacy np.core path because some numpoly versions reach it
+# directly via the old name even on numpy 2.x.
+try:
+    if not hasattr(np.core.multiarray, "set_legacy_print_mode"):  # noqa: NPY201
+        np.core.multiarray.set_legacy_print_mode = _noop          # noqa: NPY201
+except AttributeError:
+    pass
 
 import hydra
 from hydra.core.config_store import ConfigStore
