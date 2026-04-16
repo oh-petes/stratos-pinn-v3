@@ -234,33 +234,22 @@ class BestWeightSolver(Solver):
 
     def save_checkpoint(self, step: int) -> None:
         # Run the native PhysicsNeMo checkpoint first (optimizer + scheduler state).
+        # This writes heat_network.0.pth to the current working directory.
         super().save_checkpoint(step)
 
-        # Collect every unique trainable node's state_dict.
-        seen:   set  = set()
-        states: dict = {}
-        for constr in self.domain.constraints.values():
-            for node in constr.nodes:
-                nid = id(node.evaluate)
-                if (
-                    node.optimize
-                    and nid not in seen
-                    and hasattr(node.evaluate, "state_dict")
-                ):
-                    seen.add(nid)
-                    states[node.name] = node.evaluate.state_dict()
+        # Copy the just-written native checkpoint into our models/ folder with a
+        # step-numbered name.  This avoids navigating the Graph/Node API (which
+        # changed between modulus-sym versions and caused AttributeError on .nodes).
+        native = "heat_network.0.pth"
+        if not os.path.exists(native):
+            return
 
-        if not states:
-            return  # Nothing trainable found — skip.
-
-        ckpt_path = os.path.join(
-            self._BEST_DIR,
-            f"best_weights_step_{step:06d}.pth",
-        )
-        torch.save({"states": states, "step": step}, ckpt_path)
+        sd = torch.load(native, map_location="cpu")
+        ckpt_path = os.path.join(self._BEST_DIR, f"best_weights_step_{step:06d}.pth")
+        torch.save({"states": {"heat_network": sd}, "step": step}, ckpt_path)
         print(f"\n  ✓ Saved  {os.path.basename(ckpt_path)}")
 
-        # Prune oldest files, keeping only the latest _KEEP_LAST.
+        # Keep only the latest _KEEP_LAST checkpoints.
         existing = sorted(
             glob.glob(os.path.join(self._BEST_DIR, "best_weights_step_*.pth"))
         )
@@ -575,44 +564,11 @@ def run(cfg: SimConfig) -> None:
     #   - Interior PDE loss   → below 1e-3 by ~30 000 steps
     #   - Neumann BC losses   → small throughout (soft constraints)
     # -------------------------------------------------------------------------
-    # 4.8  Auto-Resume from Best Weights
+    # 4.8  Inject Loss Config & Launch Solver
     # -------------------------------------------------------------------------
-    # Scan outputs/models/ for a previously saved best_weights_*.pth file.
-    # If found, warm-start the network before the Solver is created so that
-    # PhysicsNeMo's native checkpoint (outputs/networks/) — which governs the
-    # optimizer + scheduler state and therefore the LR — can overwrite the
-    # weights if a more recent native checkpoint also exists.
-    #
-    # Priority:
-    #   native checkpoint exists  → full resume (weights + LR state) ← preferred
-    #   only best_weights exists  → warm-start weights, LR restarts from 1e-3
-    #   neither exists            → fresh training run
-    existing_best = sorted(
-        glob.glob(os.path.join(BestWeightSolver._BEST_DIR, "best_weights_*.pth"))
-    )
-    if existing_best:
-        best_file = existing_best[-1]   # highest step = most recent best
-        ckpt = torch.load(best_file, map_location="cpu")
-        loaded = 0
-        for node in (
-            n
-            for constr in domain.constraints.values()
-            for n in constr.nodes
-        ):
-            if (
-                node.name in ckpt["states"]
-                and hasattr(node.evaluate, "load_state_dict")
-            ):
-                node.evaluate.load_state_dict(ckpt["states"][node.name])
-                loaded += 1
-        print(
-            f"Auto-resumed {loaded} node(s) from {os.path.basename(best_file)}"
-            f"  at step {ckpt['step']}"
-        )
-
-    # -------------------------------------------------------------------------
-    # 4.9  Inject Loss Config & Launch Solver
-    # -------------------------------------------------------------------------
+    # Resume is handled automatically by PhysicsNeMo: on startup the Trainer
+    # scans the working directory for heat_network.0.pth / optim_checkpoint.0.pth
+    # and restores weights + optimizer state if found.
     # LossConf must be a typed dataclass (not a raw dict) to pass PhysicsNeMo's
     # schema validation.  _target_ points at the concrete aggregator class.
     from physicsnemo.sym.hydra.config import LossConf
