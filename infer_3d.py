@@ -385,9 +385,23 @@ def export_snapshots(
             shutil.copy2(fname, alias)
             print(f"  → {alias}  (alias)")
 
+    # Write a PVD file — ParaView opens this as a single time-aware dataset,
+    # enabling the Play button to animate through all snapshots automatically.
+    pvd_path = os.path.join(out_dir, "heat_animation.pvd")
+    with open(pvd_path, "w") as f:
+        f.write('<?xml version="1.0"?>\n')
+        f.write('<VTKFile type="Collection" version="0.1" byte_order="LittleEndian">\n')
+        f.write('  <Collection>\n')
+        for t_s in TIME_SNAPSHOTS:
+            vtp_name = f"T_field_t{t_s:06.1f}s.vtp"
+            f.write(f'    <DataSet timestep="{t_s}" group="" part="0" file="{vtp_name}"/>\n')
+        f.write('  </Collection>\n')
+        f.write('</VTKFile>\n')
+    print(f"\n  → {pvd_path}  (open this in ParaView for animation)")
+
     print(f"\nAll {len(TIME_SNAPSHOTS)} snapshots saved.")
-    print("Open in ParaView: File → Open → select all .vtp files → Apply")
-    print("  Colour by: T_K  |  Representation: Point Gaussian or Surface")
+    print("Open in ParaView: File → Open → heat_animation.pvd → Apply")
+    print("  Colour by: T_K  |  Hit Play to animate through time steps")
 
 
 # =============================================================================
