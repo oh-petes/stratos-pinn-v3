@@ -588,8 +588,8 @@ def run(cfg: SimConfig) -> None:
             Symbol("x"): (-RADIUS,  RADIUS),
             Symbol("y"): (-RADIUS,  RADIUS),
             Symbol("z"): (0,        HEIGHT),
-            Symbol("t"): (0,        0),     # Pinned at t=0
         },
+        parameterization={Symbol("t"): 0.0},   # pins t=0 without collapsing domain volume
         lambda_weighting={"T_hat": 5.0},
         fixed_dataset=False,
     )
