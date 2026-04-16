@@ -400,7 +400,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--model_path",
-        default=None,
+        default=os.path.join("outputs", "models", "best_weights_step_009000.pth"),
         metavar="PATH",
         help="Path to checkpoint .pth file (alias for --ckpt).",
     )
@@ -408,7 +408,7 @@ def parse_args() -> argparse.Namespace:
         "--ckpt",
         default=None,
         metavar="PATH",
-        help="Path to checkpoint .pth file (alias for --model_path).",
+        help="Path to checkpoint .pth file (overrides --model_path default).",
     )
     p.add_argument(
         "--nx", type=int, default=50, help="Grid points along x (default 50)"
