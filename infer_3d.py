@@ -35,6 +35,7 @@ import os
 import sys
 import glob
 import math
+import shutil
 import argparse
 
 import numpy as np
@@ -378,6 +379,12 @@ def export_snapshots(
         cloud.save(fname)
         print(f"  → {fname}   T ∈ [{T_K.min():.0f}, {T_K.max():.0f}] K")
 
+        # Also write the canonical Kaggle filename for the t=60s snapshot
+        if t_s == 60.0:
+            alias = os.path.join(out_dir, "cylinder_heat_t60.vtp")
+            shutil.copy2(fname, alias)
+            print(f"  → {alias}  (alias)")
+
     print(f"\nAll {len(TIME_SNAPSHOTS)} snapshots saved.")
     print("Open in ParaView: File → Open → select all .vtp files → Apply")
     print("  Colour by: T_K  |  Representation: Point Gaussian or Surface")
@@ -392,10 +399,16 @@ def parse_args() -> argparse.Namespace:
         description="Stratos PINN v3 — 3D inference & VTP export"
     )
     p.add_argument(
+        "--model_path",
+        default=None,
+        metavar="PATH",
+        help="Path to checkpoint .pth file (alias for --ckpt).",
+    )
+    p.add_argument(
         "--ckpt",
         default=None,
         metavar="PATH",
-        help="Explicit checkpoint path (skips auto-discovery).",
+        help="Path to checkpoint .pth file (alias for --model_path).",
     )
     p.add_argument(
         "--nx", type=int, default=50, help="Grid points along x (default 50)"
@@ -436,7 +449,8 @@ def main() -> None:
     print(f"Device : {device}")
 
     # --- Load network ------------------------------------------------------------
-    net = load_network(device, explicit_ckpt=args.ckpt)
+    explicit_ckpt = args.model_path or args.ckpt
+    net = load_network(device, explicit_ckpt=explicit_ckpt)
 
     # --- Build grid --------------------------------------------------------------
     x_pts, y_pts, z_pts = build_cylinder_grid(nx=args.nx, ny=args.ny, nz=args.nz)
