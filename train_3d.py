@@ -199,86 +199,42 @@ class FourierFeatureNet(Arch):
 
 class BestWeightSolver(Solver):
     """
-    Thin Solver subclass that adds three features on top of the standard
-    PhysicsNeMo Solver:
+    Thin Solver subclass that saves network weights to outputs/models/ on every
+    PhysicsNeMo checkpoint interval (save_network_freq steps).
 
-    1. Save-best checkpointing
-       Every save_network_freq steps PhysicsNeMo calls save_checkpoint().
-       We intercept it: if the tracked total loss is a new minimum we save
-       all trainable node state_dicts to outputs/models/ with a descriptive
-       filename (best_weights_step_NNNNNN_loss_X.XXe±XX.pth) and delete the
-       previous best file to prevent disk bloat.
+    Design
+    ------
+    Attempting to track total loss by wrapping compute_gradients is unreliable:
+    PhysicsNeMo's _train_loop may capture that callable as a local variable
+    before our wrapper is in place, leaving the tracker permanently at inf and
+    causing every save_checkpoint call to return early without writing anything.
 
-    2. Auto-resume from best weights
-       At construction time, if any best_weights_*.pth exists in
-       outputs/models/, load the network weights from the latest file.
-       PhysicsNeMo's NATIVE checkpoint (outputs/networks/) still governs
-       the optimizer + scheduler state, so the LR is always correct when a
-       native checkpoint is present.  If only our file exists (first resume
-       after a crash), the network warm-starts from the best-known weights
-       and the LR restarts from 1e-3 — acceptable because warm weights
-       converge fast regardless.
+    The robust alternative: always save on every checkpoint call, keep only the
+    latest _KEEP_LAST files (default 3) so disk usage stays bounded.
 
-    3. Loss capture
-       compute_gradients is set as a plain function reference by
-       Trainer.__init__, not as a bound method, so wrapping it in our
-       __init__ (after super().__init__) is safe and requires no changes to
-       the training loop or _train_loop() override.
+    File format
+    -----------
+    outputs/models/best_weights_step_NNNNNN.pth
+    payload: {"states": {"heat_network": <state_dict>}, "step": N}
 
-    NOTE on Dynamic Loss Balancing (Feature 5 from directive):
-       PhysicsNeMo exposes GradNorm / ReLoBRaLo aggregators via the
-       loss._target_ config field.  However, these aggregators require
-       per-constraint gradient norms computed inside the Trainer's
-       CUDA-graph path, and their API changed incompatibly between 0.6 and
-       the current HEAD.  Enabling them with the cloned HEAD on Python 3.12
-       is too brittle without a working test environment.  Skipped per
-       directive: "If native support is too brittle, skip this step."
-       The manual lambda_weighting values in each constraint (10× Dirichlet,
-       5× IC) already provide coarse loss balancing.
+    Auto-resume
+    -----------
+    Before the Solver is constructed, the caller scans outputs/models/ for
+    existing best_weights_step_*.pth files and warm-starts the network from
+    the latest one.  PhysicsNeMo's native checkpoint (outputs/networks/)
+    governs optimizer + scheduler state for a full training-state resume.
     """
 
-    _BEST_DIR: str = os.path.join("outputs", "models")
+    _BEST_DIR:  str = os.path.join("outputs", "models")
+    _KEEP_LAST: int = 3   # number of recent checkpoint files to retain
 
     def __init__(self, cfg: "SimConfig", domain: Domain) -> None:
-        self._loss_tracker: dict = {"last": float("inf")}
-        self._best_loss: float = float("inf")
-        self._best_ckpt: "str | None" = None
         os.makedirs(self._BEST_DIR, exist_ok=True)
-
         super().__init__(cfg, domain)
 
-        # Wrap compute_gradients (a plain callable set by Trainer.__init__)
-        # to record the total-loss scalar after every backward pass.
-        # Must wrap AFTER super().__init__ so the original reference exists.
-        _orig    = self.compute_gradients
-        _tracker = self._loss_tracker
-
-        def _tracked(aggregator, model, step):
-            loss, losses = _orig(aggregator, model, step)
-            _tracker["last"] = float(loss.detach())
-            return loss, losses
-
-        self.compute_gradients = _tracked
-
     def save_checkpoint(self, step: int) -> None:
-        # Always run the native Modulus checkpoint first.
-        # This preserves optimizer + scheduler state for full training-state
-        # resume and writes to outputs/networks/ as usual.
+        # Run the native PhysicsNeMo checkpoint first (optimizer + scheduler state).
         super().save_checkpoint(step)
-
-        loss_val = self._loss_tracker["last"]
-        if loss_val >= self._best_loss:
-            return  # No improvement — nothing to do.
-
-        # Remove the previous best file (disk hygiene).
-        if self._best_ckpt and os.path.exists(self._best_ckpt):
-            os.remove(self._best_ckpt)
-
-        self._best_loss = loss_val
-        self._best_ckpt = os.path.join(
-            self._BEST_DIR,
-            f"best_weights_step_{step:06d}_loss_{loss_val:.2e}.pth",
-        )
 
         # Collect every unique trainable node's state_dict.
         seen:   set  = set()
@@ -294,14 +250,23 @@ class BestWeightSolver(Solver):
                     seen.add(nid)
                     states[node.name] = node.evaluate.state_dict()
 
-        torch.save(
-            {"states": states, "step": step, "loss": self._best_loss},
-            self._best_ckpt,
+        if not states:
+            return  # Nothing trainable found — skip.
+
+        ckpt_path = os.path.join(
+            self._BEST_DIR,
+            f"best_weights_step_{step:06d}.pth",
         )
-        print(
-            f"\n  ✓ New best  step={step:6d}  "
-            f"loss={self._best_loss:.4e}  → {os.path.basename(self._best_ckpt)}"
+        torch.save({"states": states, "step": step}, ckpt_path)
+        print(f"\n  ✓ Saved  {os.path.basename(ckpt_path)}")
+
+        # Prune oldest files, keeping only the latest _KEEP_LAST.
+        existing = sorted(
+            glob.glob(os.path.join(self._BEST_DIR, "best_weights_step_*.pth"))
         )
+        for old in existing[: -self._KEEP_LAST]:
+            os.remove(old)
+            print(f"  ✗ Removed {os.path.basename(old)}")
 
 
 # =============================================================================
@@ -641,8 +606,8 @@ def run(cfg: SimConfig) -> None:
                 node.evaluate.load_state_dict(ckpt["states"][node.name])
                 loaded += 1
         print(
-            f"Auto-resumed {loaded} node(s) from {os.path.basename(best_file)}\n"
-            f"  best_loss={ckpt['loss']:.4e}  at step {ckpt['step']}"
+            f"Auto-resumed {loaded} node(s) from {os.path.basename(best_file)}"
+            f"  at step {ckpt['step']}"
         )
 
     # -------------------------------------------------------------------------

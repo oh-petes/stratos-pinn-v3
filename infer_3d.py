@@ -190,12 +190,13 @@ def _load_state_dict(net: FourierFeatureNet, path: str, label: str) -> None:
     """Load state dict from path, handling both checkpoint formats."""
     raw = torch.load(path, map_location="cpu")
 
-    # BestWeightSolver format: {"states": {"heat_network": <sd>}, "step": N, "loss": L}
+    # BestWeightSolver format: {"states": {"heat_network": <sd>}, "step": N}
     if isinstance(raw, dict) and "states" in raw:
         sd = raw["states"]["heat_network"]
         step = raw.get("step", "?")
-        loss = raw.get("loss", float("nan"))
-        print(f"[{label}] Loaded best weights  step={step}  loss={loss:.4e}")
+        loss = raw.get("loss", None)
+        loss_str = f"  loss={loss:.4e}" if loss is not None else ""
+        print(f"[{label}] Loaded weights  step={step}{loss_str}")
         print(f"         File: {os.path.basename(path)}")
 
     # Plain state dict (PhysicsNeMo native) or wrapper with 'state_dict' key
